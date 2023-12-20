@@ -1,0 +1,28 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "skull_king_scorecard",
+            "cwd": "skull_king_scorecard",
+            "request": "launch",
+            "type": "dart"
+        },
+        {
+            "name": "skull_king_scorecard (profile mode)",
+            "cwd": "skull_king_scorecard",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "profile"
+        },
+        {
+            "name": "skull_king_scorecard (release mode)",
+            "cwd": "skull_king_scorecard",
+            "request": "launch",
+            "type": "dart",
+            "flutterMode": "release"
+        }
+    ]
+}
