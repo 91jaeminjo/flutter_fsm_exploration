@@ -1,0 +1,46 @@
+import 'type_converters.dart';
+
+CREATE TABLE games (
+    id INT NOT NULL PRIMARY KEY AUTOINCREMENT,
+    date INT MAPPED BY `const InstantConverter()` UNIQUE
+);
+
+CREATE TABLE players (
+    id INT NOT NULL PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    high_score  INT NOT NULL DEFAULT 0
+);
+
+CREATE TABLE game_participants (
+    id INT NOT NULL PRIMARY KEY AUTOINCREMENT,
+    game INT NOT NULL,
+    player INT NOT NULL,
+
+    UNIQUE (game, player),
+
+    FOREIGN KEY (game)
+    REFERENCES games (id)
+    ON DELETE CASCADE
+    ON UPDATE CASCADE,
+
+    FOREIGN KEY (player)
+    REFERENCES players (id)
+    ON DELETE CASCADE
+    ON UPDATE CASCADE
+);
+
+CREATE TABLE game_detail (
+    id INT NOT NULL PRIMARY KEY AUTOINCREMENT,
+    participant INT NOT NULL,
+    round INT NOT NULL,
+    predicted_wins INT NOT NULL,
+    actual_wins INT NOT NULL,
+    bonus INT NOT NULL,
+    round_points INT NOT NULL,
+    accumulated_points INT NOT NULL,
+
+    FOREIGN KEY (participant)
+    REFERENCES game_participants (id)
+    ON DELETE CASCADE
+    ON UPDATE CASCADE
+);
