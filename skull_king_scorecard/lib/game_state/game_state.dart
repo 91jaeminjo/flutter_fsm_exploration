@@ -1,15 +1,13 @@
 import 'package:automata/automata.dart';
 import 'package:stream_transform/stream_transform.dart';
-import 'package:time_machine/time_machine.dart';
 
-import 'game_records.dart';
 import 'game_session_tokens.dart';
 
 class SkullKingState {
   late final StateMachine appFsm;
   late final Stream<GameState> stateStream;
   SkullKingState() {
-    appFsm = _stateMachineSetup();
+    appFsm = _appStateMachineSetup();
     stateStream = appFsm.stream
         .map(
           (event) => GameState(event.activeNodes.last.stateType, session),
@@ -21,7 +19,7 @@ class SkullKingState {
   GameSessionToken get session =>
       _sessionHistory.isEmpty ? GameSessionToken([]) : _sessionHistory.last;
 
-  StateMachine _stateMachineSetup() => StateMachine.create(
+  StateMachine _appStateMachineSetup() => StateMachine.create(
         id: 'skull_king_fsm',
         (g) => g
           ..initial<Home>()
