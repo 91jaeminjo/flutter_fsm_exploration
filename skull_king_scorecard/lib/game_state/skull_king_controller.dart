@@ -3,7 +3,7 @@ import 'game_state.dart';
 class SkullKingController {
   final SkullKingState gameState;
 
-  Stream<GameState> get stateStream => gameState.stateStream;
+  Stream<Type> get appStateStream => gameState.stateStream;
 
   const SkullKingController(this.gameState);
 
