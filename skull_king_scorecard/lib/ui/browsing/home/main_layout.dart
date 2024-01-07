@@ -22,21 +22,21 @@ class SkullKingWidget extends ConsumerWidget {
         title: Text(title),
       ),
       body: Center(
-        child: StreamBuilder<GameState>(
-            stream: skullKingControl.stateStream,
+        child: StreamBuilder<Type>(
+            stream: skullKingControl.appStateStream,
             builder: (context, snapshot) {
               final gameState = snapshot.data;
               if (gameState == null) {
                 return Container();
               }
-              switch (gameState.state) {
+              switch (gameState) {
                 case Home:
                 case History:
                   return const Dashboard();
                 case InitGame:
                   return const InitGamePage();
                 case Playing:
-                  return ScorePage(gameState.session);
+                  return const GamePage();
               }
               return const Dashboard();
             }),
