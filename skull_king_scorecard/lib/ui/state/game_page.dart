@@ -6,15 +6,14 @@ import '/ui/controls.dart';
 
 import 'player_score_card.dart';
 
-class ScorePage extends StatefulWidget {
-  final GameSessionToken gameSessionToken;
-  const ScorePage(this.gameSessionToken, {super.key});
+class GamePage extends StatefulWidget {
+  const GamePage({super.key});
 
   @override
-  State<ScorePage> createState() => _ScorePageState();
+  State<GamePage> createState() => _GamePageState();
 }
 
-class _ScorePageState extends State<ScorePage> {
+class _GamePageState extends State<GamePage> {
   int roundNumber = 1;
   bool roundStarted = false;
   late int roundNumberIndex;
@@ -27,8 +26,8 @@ class _ScorePageState extends State<ScorePage> {
 
   @override
   Widget build(BuildContext context) {
-    final players = widget.gameSessionToken.players;
-    final gameRecordList = widget.gameSessionToken.records.recordList;
+    final players = [];
+    final gameRecordList = [];
     final textControllers = <String, TextEditingController>{};
     // final gamePredictionRecord = <String, int>{};
     // final gameWinRecord = <String, int>{};
@@ -48,7 +47,7 @@ class _ScorePageState extends State<ScorePage> {
                 height: 4,
               ),
             ),
-          if (roundNumber != 1) PlayerSummary(gameRecordList, roundNumber),
+          // if (roundNumber != 1) PlayerSummary(gameRecordList, roundNumber),
           if (roundNumber != 11)
             for (String player in players)
               PlayerScoreCard(

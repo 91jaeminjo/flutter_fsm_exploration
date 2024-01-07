@@ -1,1 +1,1 @@
-export 'state/score_page.dart';
+export 'state/game_page.dart';
