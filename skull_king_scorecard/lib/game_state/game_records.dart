@@ -4,7 +4,7 @@ class GameRecord {
   final Instant startTime;
   final List<Map<String, RoundRecord>> recordList = [];
 
-  GameRecord({required this.startTime, required List<String> players}) {
+  GameRecord({required List<String> players}) : startTime = Instant.now() {
     for (int i = 0; i < 10; i++) {
       recordList.add({});
       for (String player in players) {
@@ -17,6 +17,23 @@ class GameRecord {
         );
       }
     }
+  }
+
+  bool addRecord(Map<String, RoundRecord> record) {
+    if (recordList.length > 9) {
+      return false;
+    }
+    recordList.add(record);
+    return true;
+  }
+
+  bool modifyRoundRecord(
+      {required int roundNumber, required Map<String, RoundRecord> record}) {
+    if (roundNumber < 0 || roundNumber > 9) {
+      return false;
+    }
+    recordList[roundNumber] = record;
+    return true;
   }
 }
 
