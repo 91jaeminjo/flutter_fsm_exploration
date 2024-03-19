@@ -1,4 +1,9 @@
+import 'dart:async';
+
 import 'package:automata/automata.dart';
+import 'package:path/path.dart';
+import 'package:skull_king_scorecard/game_state/database/skull_king_database.dart';
+import 'package:skull_king_scorecard/game_state/game_records.dart';
 import 'package:stream_transform/stream_transform.dart';
 
 import 'game_session_tokens.dart';
@@ -6,21 +11,157 @@ import 'game_session_tokens.dart';
 class SkullKingState {
   late final StateMachine appFsm;
   late final StateMachine gameFsm;
-  late final Stream<GameState> stateStream;
+  late final Stream<Type> stateStream;
+
+  int get currentRound => _sessionState.currentRound;
+  set currentRound(int roundNumber) => _sessionState.currentRound = roundNumber;
+  GameState _sessionState = GameState(
+    PreGameState,
+    GameRecord(
+      players: [],
+    ),
+  );
+
+  final StreamController<GameState> gameStreamController =
+      StreamController<GameState>.broadcast();
   SkullKingState() {
     appFsm = _appStateMachineSetup();
     gameFsm = _gameStateMachineSetup();
     stateStream = appFsm.stream
         .map(
-          (event) => GameState(event.activeNodes.last.stateType, session),
+          (event) => event.activeNodes.last.stateType,
         )
-        .startWith(GameState(Home, session));
-        
+        .startWith(Home);
+
+    gameFsm.stream.map((event) {
+      _sessionState.state = event.activeNodes.last.stateType;
+      gameStreamController.add(_sessionState);
+    }).listen((event) {});
   }
 
-  final List<GameSessionToken> _sessionHistory = [];
-  GameSessionToken get session =>
-      _sessionHistory.isEmpty ? GameSessionToken([]) : _sessionHistory.last;
+  Stream<GameState> get gameStream =>
+      gameStreamController.stream.startWith(_sessionState
+          // GameState(
+          //   Prediction,
+          //   GameRecord(
+          //     players:
+          //         .isEmpty ? [] : _sessionState.last.record.players,
+          //     roundNumber: _sessionState.last.record.roundNumber,
+          //   ),
+          // ),
+          );
+
+  Map<String, int> playerPrediction = {};
+  Map<String, int> playerWins = {};
+  Map<String, int> playerBonus = {};
+
+  void recordPlayerPredictions(
+      {required String player, required int prediction}) {
+    playerPrediction[player] = prediction;
+  }
+
+  void recordPlayerWins({required String player, required int wins}) {
+    playerWins[player] = wins;
+  }
+
+  void startGame() {
+    final records = <String, RoundRecord>{};
+    currentRound = 1;
+    for (final entry in playerPrediction.entries) {
+      final player = entry.key;
+      final record = RoundRecord(
+        roundNumber: currentRound,
+        player: player,
+        winsPredicted: 0,
+        actualWins: 0,
+        bonus: 0,
+      );
+      records[player] = record;
+    }
+    _sessionState.record.addRecord(records);
+    gameFsm.send(StartNewGame());
+  }
+
+  void startRound() {
+    final records = <String, RoundRecord>{};
+    for (final entry in playerPrediction.entries) {
+      final player = entry.key;
+      final record = RoundRecord(
+        roundNumber: currentRound,
+        player: player,
+        winsPredicted: entry.value,
+        actualWins: 0,
+        bonus: 0,
+      );
+      records[player] = record;
+    }
+    _sessionState.record
+        .modifyRecord(roundNumber: currentRound - 1, record: records);
+    gameFsm.send(GotoPlay(
+        // currentRound, records
+        ));
+  }
+
+  // maybe send record directly through parameter here?
+  void endRound() {
+    final records = <String, RoundRecord>{};
+    for (final player in playerPrediction.keys) {
+      final record = RoundRecord(
+        roundNumber: currentRound,
+        player: player,
+        winsPredicted: playerPrediction[player] ?? 0,
+        actualWins: playerWins[player] ?? 0,
+        bonus: playerBonus[player] ?? 0,
+      );
+      records[player] = record;
+    }
+
+    print(_sessionState.record.recordList);
+    print('adding records: $records');
+    _sessionState.record
+        .modifyRecord(roundNumber: currentRound - 1, record: records);
+    print(_sessionState.record.recordList);
+    final newRecords = <String, RoundRecord>{};
+    if (currentRound >= _sessionState.record.recordList.length) {
+      for (final entry in playerPrediction.entries) {
+        final player = entry.key;
+        final record = RoundRecord(
+          roundNumber: currentRound + 1,
+          player: player,
+          winsPredicted: 0,
+          actualWins: 0,
+          bonus: 0,
+        );
+        newRecords[player] = record;
+      }
+      _sessionState.record.addRecord(newRecords);
+      // final newGameRecord = GameRecord(
+      //   players: _sessionState.record.players,
+      //   roundNumber: currentRound + 1,
+      //   records: _sessionState.record.recordList,
+      // );
+      print(_sessionState.record.recordList);
+      // _sessionState.add(GameState(_sessionState.last.state, newGameRecord));
+    }
+    currentRound++;
+
+    gameFsm.send(EndRound());
+  }
+
+  void goToRound(int roundNumber) {}
+
+  void goForward() {
+    gameFsm.send(GoForward());
+  }
+
+  void goBackward() {
+    gameFsm.send(GoBackward(
+        // roundNumber, records
+        ));
+  }
+
+  // GameState get session =>
+  //     _sessionHistory.isEmpty ? GameState([]) : _sessionHistory.last;
 
   StateMachine _appStateMachineSetup() => StateMachine.create(
         id: 'skull_king_fsm',
@@ -33,21 +174,29 @@ class SkullKingState {
               })
               ..on<StartNewGame, InitGame>(actions: [
                 //wake lock
-                (_) => _sessionHistory.clear(),
               ])
               ..on<ViewGameHistory, History>(),
           )
           ..state<InitGame>(
             builder: (g) => g
               ..onEntry((_) {})
-              ..on<InitGameFinished, Playing>(actions: [
-                (gameSetup) =>
-                    _sessionHistory.add(GameSessionToken(gameSetup.players))
-              ])
+              ..on<InitGameFinished, Playing>(
+                actions: [
+                  (gameSetUp) => _sessionState = GameState(
+                        PreGameState,
+                        GameRecord(
+                          players: gameSetUp.players,
+                        ),
+                      ),
+                ],
+              )
               ..on<Exit, Home>(),
           )
           ..state<Playing>(
             builder: (g) => g
+              ..onEntry((_) {
+                startGame();
+              })
               ..on<GameFinished, Home>()
               ..on<Exit, Home>(),
           )
@@ -57,633 +206,74 @@ class SkullKingState {
               ..on<Exit, Home>(),
           ),
       );
+
+  StateMachine _gameStateMachineSetup() => StateMachine.create(
+        id: 'skull_king_game_fsm',
+        (g) => g
+          ..initial<PreGameState>()
+          ..state<PreGameState>(
+            builder: (g) => g
+              ..onEntry(
+                (_) {},
+              )
+              ..on<StartNewGame, Prediction>(actions: [(_) => currentRound = 1])
+              ..on<GotoPlay, Play>(),
+          )
+          ..state<Prediction>(
+            builder: (g) => g
+              ..onEntry(
+                (_) {
+                  print('entered  prediction');
+                },
+              )
+              ..on<GotoPlay, Play>()
+              ..on<GoForward, Play>()
+              ..on<GoBackward, Play>(
+                  condition: (_) => currentRound > 1,
+                  actions: [(_) => currentRound--])
+              ..on<GoBackward, PreGameState>(),
+          )
+          ..state<Play>(
+            builder: (g) => g
+              ..onEntry(
+                (_) {
+                  print('entered  play');
+                },
+              )
+              ..on<EndRound, Prediction>(
+                condition: (e) => currentRound < 11,
+              )
+              ..on<EndRound, GameEnd>(
+                condition: (e) => currentRound == 11,
+              )
+              ..on<GoForward, Prediction>(
+                  condition: (e) => currentRound < 11,
+                  actions: [(_) => currentRound++])
+              ..on<GoForward, GameEnd>(
+                condition: (e) => currentRound == 11,
+              )
+              ..on<GoBackward, Prediction>(),
+          )
+          ..state<GameEnd>(
+            builder: (g) => g
+              ..onEntry(
+                (_) {},
+              )
+              ..on<EndRound, Prediction>()
+              ..on<GotoPrediction, Prediction>()
+              ..on<GotoPlay, Play>()
+              ..on<GoForward, PreGameState>()
+              ..on<GoBackward, Play>(),
+          ),
+      );
 }
 
-StateMachine _gameStateMachineSetup() => StateMachine.create(
-      id: 'skull_king_game_fsm',
-      (g) => g
-        ..initial<SetUpGameState>()
-        ..state<SetUpGameState>(
-          builder: (g) => g
-            ..onEntry(
-              (_) {},
-            )
-            ..on<GotoFirstPrediction, FirstPrediction>()
-            ..on<GotoSecondPrediction, SecondPrediction>()
-            ..on<GotoThirdPrediction, ThirdPrediction>()
-            ..on<GotoFourthPrediction, FourthPrediction>()
-            ..on<GotoFifthPrediction, FifthPrediction>()
-            ..on<GotoSixthPrediction, SixthPrediction>()
-            ..on<GotoSeventhPrediction, SeventhPrediction>()
-            ..on<GotoEighthPrediction, EighthPrediction>()
-            ..on<GotoNinthPrediction, NinthPrediction>()
-            ..on<GotoTenthPrediction, TenthPrediction>()
-            ..on<GotoFirstPlay, FirstPlay>()
-            ..on<GotoSecondPlay, SecondPlay>()
-            ..on<GotoThirdPlay, ThirdPlay>()
-            ..on<GotoFourthPlay, FourthPlay>()
-            ..on<GotoFifthPlay, FifthPlay>()
-            ..on<GotoSixthPlay, SixthPlay>()
-            ..on<GotoSeventhPlay, SeventhPlay>()
-            ..on<GotoEighthPlay, EighthPlay>()
-            ..on<GotoNinthPlay, NinthPlay>()
-            ..on<GotoTenthPlay, TenthPlay>(),
-        )
-        ..state<FirstPrediction>(
-          builder: (g) => g
-            ..onEntry(
-              (_) {},
-            )
-            ..on<GotoFirstPrediction, FirstPrediction>()
-            ..on<GotoSecondPrediction, SecondPrediction>()
-            ..on<GotoThirdPrediction, ThirdPrediction>()
-            ..on<GotoFourthPrediction, FourthPrediction>()
-            ..on<GotoFifthPrediction, FifthPrediction>()
-            ..on<GotoSixthPrediction, SixthPrediction>()
-            ..on<GotoSeventhPrediction, SeventhPrediction>()
-            ..on<GotoEighthPrediction, EighthPrediction>()
-            ..on<GotoNinthPrediction, NinthPrediction>()
-            ..on<GotoTenthPrediction, TenthPrediction>()
-            ..on<GotoFirstPlay, FirstPlay>()
-            ..on<GotoSecondPlay, SecondPlay>()
-            ..on<GotoThirdPlay, ThirdPlay>()
-            ..on<GotoFourthPlay, FourthPlay>()
-            ..on<GotoFifthPlay, FifthPlay>()
-            ..on<GotoSixthPlay, SixthPlay>()
-            ..on<GotoSeventhPlay, SeventhPlay>()
-            ..on<GotoEighthPlay, EighthPlay>()
-            ..on<GotoNinthPlay, NinthPlay>()
-            ..on<GotoTenthPlay, TenthPlay>()
-            ..on<GoForward, FirstPlay>()
-            ..on<GoBackward, SetUpGameState>(),
-        )
-        ..state<SecondPrediction>(
-          builder: (g) => g
-            ..onEntry(
-              (_) {},
-            )
-            ..on<GotoFirstPrediction, FirstPrediction>()
-            ..on<GotoSecondPrediction, SecondPrediction>()
-            ..on<GotoThirdPrediction, ThirdPrediction>()
-            ..on<GotoFourthPrediction, FourthPrediction>()
-            ..on<GotoFifthPrediction, FifthPrediction>()
-            ..on<GotoSixthPrediction, SixthPrediction>()
-            ..on<GotoSeventhPrediction, SeventhPrediction>()
-            ..on<GotoEighthPrediction, EighthPrediction>()
-            ..on<GotoNinthPrediction, NinthPrediction>()
-            ..on<GotoTenthPrediction, TenthPrediction>()
-            ..on<GotoFirstPlay, FirstPlay>()
-            ..on<GotoSecondPlay, SecondPlay>()
-            ..on<GotoThirdPlay, ThirdPlay>()
-            ..on<GotoFourthPlay, FourthPlay>()
-            ..on<GotoFifthPlay, FifthPlay>()
-            ..on<GotoSixthPlay, SixthPlay>()
-            ..on<GotoSeventhPlay, SeventhPlay>()
-            ..on<GotoEighthPlay, EighthPlay>()
-            ..on<GotoNinthPlay, NinthPlay>()
-            ..on<GotoTenthPlay, TenthPlay>()
-            ..on<GoForward, SecondPlay>()
-            ..on<GoBackward, FirstPlay>(),
-        )
-        ..state<ThirdPrediction>(
-          builder: (g) => g
-            ..onEntry(
-              (_) {},
-            )
-            ..on<GotoFirstPrediction, FirstPrediction>()
-            ..on<GotoSecondPrediction, SecondPrediction>()
-            ..on<GotoThirdPrediction, ThirdPrediction>()
-            ..on<GotoFourthPrediction, FourthPrediction>()
-            ..on<GotoFifthPrediction, FifthPrediction>()
-            ..on<GotoSixthPrediction, SixthPrediction>()
-            ..on<GotoSeventhPrediction, SeventhPrediction>()
-            ..on<GotoEighthPrediction, EighthPrediction>()
-            ..on<GotoNinthPrediction, NinthPrediction>()
-            ..on<GotoTenthPrediction, TenthPrediction>()
-            ..on<GotoFirstPlay, FirstPlay>()
-            ..on<GotoSecondPlay, SecondPlay>()
-            ..on<GotoThirdPlay, ThirdPlay>()
-            ..on<GotoFourthPlay, FourthPlay>()
-            ..on<GotoFifthPlay, FifthPlay>()
-            ..on<GotoSixthPlay, SixthPlay>()
-            ..on<GotoSeventhPlay, SeventhPlay>()
-            ..on<GotoEighthPlay, EighthPlay>()
-            ..on<GotoNinthPlay, NinthPlay>()
-            ..on<GotoTenthPlay, TenthPlay>()
-            ..on<GoForward, ThirdPlay>()
-            ..on<GoBackward, SecondPlay>(),
-        )
-        ..state<FourthPrediction>(
-          builder: (g) => g
-            ..onEntry(
-              (_) {},
-            )
-            ..on<GotoFirstPrediction, FirstPrediction>()
-            ..on<GotoSecondPrediction, SecondPrediction>()
-            ..on<GotoThirdPrediction, ThirdPrediction>()
-            ..on<GotoFourthPrediction, FourthPrediction>()
-            ..on<GotoFifthPrediction, FifthPrediction>()
-            ..on<GotoSixthPrediction, SixthPrediction>()
-            ..on<GotoSeventhPrediction, SeventhPrediction>()
-            ..on<GotoEighthPrediction, EighthPrediction>()
-            ..on<GotoNinthPrediction, NinthPrediction>()
-            ..on<GotoTenthPrediction, TenthPrediction>()
-            ..on<GotoFirstPlay, FirstPlay>()
-            ..on<GotoSecondPlay, SecondPlay>()
-            ..on<GotoThirdPlay, ThirdPlay>()
-            ..on<GotoFourthPlay, FourthPlay>()
-            ..on<GotoFifthPlay, FifthPlay>()
-            ..on<GotoSixthPlay, SixthPlay>()
-            ..on<GotoSeventhPlay, SeventhPlay>()
-            ..on<GotoEighthPlay, EighthPlay>()
-            ..on<GotoNinthPlay, NinthPlay>()
-            ..on<GotoTenthPlay, TenthPlay>()
-            ..on<GoForward, FourthPlay>()
-            ..on<GoBackward, ThirdPlay>(),
-        )
-        ..state<FifthPrediction>(
-          builder: (g) => g
-            ..onEntry(
-              (_) {},
-            )
-            ..on<GotoFirstPrediction, FirstPrediction>()
-            ..on<GotoSecondPrediction, SecondPrediction>()
-            ..on<GotoThirdPrediction, ThirdPrediction>()
-            ..on<GotoFourthPrediction, FourthPrediction>()
-            ..on<GotoFifthPrediction, FifthPrediction>()
-            ..on<GotoSixthPrediction, SixthPrediction>()
-            ..on<GotoSeventhPrediction, SeventhPrediction>()
-            ..on<GotoEighthPrediction, EighthPrediction>()
-            ..on<GotoNinthPrediction, NinthPrediction>()
-            ..on<GotoTenthPrediction, TenthPrediction>()
-            ..on<GotoFirstPlay, FirstPlay>()
-            ..on<GotoSecondPlay, SecondPlay>()
-            ..on<GotoThirdPlay, ThirdPlay>()
-            ..on<GotoFourthPlay, FourthPlay>()
-            ..on<GotoFifthPlay, FifthPlay>()
-            ..on<GotoSixthPlay, SixthPlay>()
-            ..on<GotoSeventhPlay, SeventhPlay>()
-            ..on<GotoEighthPlay, EighthPlay>()
-            ..on<GotoNinthPlay, NinthPlay>()
-            ..on<GotoTenthPlay, TenthPlay>()
-            ..on<GoForward, FifthPlay>()
-            ..on<GoBackward, FourthPlay>(),
-        )
-        ..state<SixthPrediction>(
-          builder: (g) => g
-            ..onEntry(
-              (_) {},
-            )
-            ..on<GotoFirstPrediction, FirstPrediction>()
-            ..on<GotoSecondPrediction, SecondPrediction>()
-            ..on<GotoThirdPrediction, ThirdPrediction>()
-            ..on<GotoFourthPrediction, FourthPrediction>()
-            ..on<GotoFifthPrediction, FifthPrediction>()
-            ..on<GotoSixthPrediction, SixthPrediction>()
-            ..on<GotoSeventhPrediction, SeventhPrediction>()
-            ..on<GotoEighthPrediction, EighthPrediction>()
-            ..on<GotoNinthPrediction, NinthPrediction>()
-            ..on<GotoTenthPrediction, TenthPrediction>()
-            ..on<GotoFirstPlay, FirstPlay>()
-            ..on<GotoSecondPlay, SecondPlay>()
-            ..on<GotoThirdPlay, ThirdPlay>()
-            ..on<GotoFourthPlay, FourthPlay>()
-            ..on<GotoFifthPlay, FifthPlay>()
-            ..on<GotoSixthPlay, SixthPlay>()
-            ..on<GotoSeventhPlay, SeventhPlay>()
-            ..on<GotoEighthPlay, EighthPlay>()
-            ..on<GotoNinthPlay, NinthPlay>()
-            ..on<GotoTenthPlay, TenthPlay>()
-            ..on<GoForward, SixthPlay>()
-            ..on<GoBackward, FifthPlay>(),
-        )
-        ..state<SeventhPrediction>(
-          builder: (g) => g
-            ..onEntry(
-              (_) {},
-            )
-            ..on<GotoFirstPrediction, FirstPrediction>()
-            ..on<GotoSecondPrediction, SecondPrediction>()
-            ..on<GotoThirdPrediction, ThirdPrediction>()
-            ..on<GotoFourthPrediction, FourthPrediction>()
-            ..on<GotoFifthPrediction, FifthPrediction>()
-            ..on<GotoSixthPrediction, SixthPrediction>()
-            ..on<GotoSeventhPrediction, SeventhPrediction>()
-            ..on<GotoEighthPrediction, EighthPrediction>()
-            ..on<GotoNinthPrediction, NinthPrediction>()
-            ..on<GotoTenthPrediction, TenthPrediction>()
-            ..on<GotoFirstPlay, FirstPlay>()
-            ..on<GotoSecondPlay, SecondPlay>()
-            ..on<GotoThirdPlay, ThirdPlay>()
-            ..on<GotoFourthPlay, FourthPlay>()
-            ..on<GotoFifthPlay, FifthPlay>()
-            ..on<GotoSixthPlay, SixthPlay>()
-            ..on<GotoSeventhPlay, SeventhPlay>()
-            ..on<GotoEighthPlay, EighthPlay>()
-            ..on<GotoNinthPlay, NinthPlay>()
-            ..on<GotoTenthPlay, TenthPlay>()
-            ..on<GoForward, SeventhPlay>()
-            ..on<GoBackward, SixthPlay>(),
-        )
-        ..state<EighthPrediction>(
-          builder: (g) => g
-            ..onEntry(
-              (_) {},
-            )
-            ..on<GotoFirstPrediction, FirstPrediction>()
-            ..on<GotoSecondPrediction, SecondPrediction>()
-            ..on<GotoThirdPrediction, ThirdPrediction>()
-            ..on<GotoFourthPrediction, FourthPrediction>()
-            ..on<GotoFifthPrediction, FifthPrediction>()
-            ..on<GotoSixthPrediction, SixthPrediction>()
-            ..on<GotoSeventhPrediction, SeventhPrediction>()
-            ..on<GotoEighthPrediction, EighthPrediction>()
-            ..on<GotoNinthPrediction, NinthPrediction>()
-            ..on<GotoTenthPrediction, TenthPrediction>()
-            ..on<GotoFirstPlay, FirstPlay>()
-            ..on<GotoSecondPlay, SecondPlay>()
-            ..on<GotoThirdPlay, ThirdPlay>()
-            ..on<GotoFourthPlay, FourthPlay>()
-            ..on<GotoFifthPlay, FifthPlay>()
-            ..on<GotoSixthPlay, SixthPlay>()
-            ..on<GotoSeventhPlay, SeventhPlay>()
-            ..on<GotoEighthPlay, EighthPlay>()
-            ..on<GotoNinthPlay, NinthPlay>()
-            ..on<GotoTenthPlay, TenthPlay>()
-            ..on<GoForward, EighthPlay>()
-            ..on<GoBackward, SeventhPlay>(),
-        )
-        ..state<NinthPrediction>(
-          builder: (g) => g
-            ..onEntry(
-              (_) {},
-            )
-            ..on<GotoFirstPrediction, FirstPrediction>()
-            ..on<GotoSecondPrediction, SecondPrediction>()
-            ..on<GotoThirdPrediction, ThirdPrediction>()
-            ..on<GotoFourthPrediction, FourthPrediction>()
-            ..on<GotoFifthPrediction, FifthPrediction>()
-            ..on<GotoSixthPrediction, SixthPrediction>()
-            ..on<GotoSeventhPrediction, SeventhPrediction>()
-            ..on<GotoEighthPrediction, EighthPrediction>()
-            ..on<GotoNinthPrediction, NinthPrediction>()
-            ..on<GotoTenthPrediction, TenthPrediction>()
-            ..on<GotoFirstPlay, FirstPlay>()
-            ..on<GotoSecondPlay, SecondPlay>()
-            ..on<GotoThirdPlay, ThirdPlay>()
-            ..on<GotoFourthPlay, FourthPlay>()
-            ..on<GotoFifthPlay, FifthPlay>()
-            ..on<GotoSixthPlay, SixthPlay>()
-            ..on<GotoSeventhPlay, SeventhPlay>()
-            ..on<GotoEighthPlay, EighthPlay>()
-            ..on<GotoNinthPlay, NinthPlay>()
-            ..on<GotoTenthPlay, TenthPlay>()
-            ..on<GoForward, NinthPlay>()
-            ..on<GoBackward, EighthPlay>(),
-        )
-        ..state<TenthPrediction>(
-          builder: (g) => g
-            ..onEntry(
-              (_) {},
-            )
-            ..on<GotoFirstPrediction, FirstPrediction>()
-            ..on<GotoSecondPrediction, SecondPrediction>()
-            ..on<GotoThirdPrediction, ThirdPrediction>()
-            ..on<GotoFourthPrediction, FourthPrediction>()
-            ..on<GotoFifthPrediction, FifthPrediction>()
-            ..on<GotoSixthPrediction, SixthPrediction>()
-            ..on<GotoSeventhPrediction, SeventhPrediction>()
-            ..on<GotoEighthPrediction, EighthPrediction>()
-            ..on<GotoNinthPrediction, NinthPrediction>()
-            ..on<GotoTenthPrediction, TenthPrediction>()
-            ..on<GotoFirstPlay, FirstPlay>()
-            ..on<GotoSecondPlay, SecondPlay>()
-            ..on<GotoThirdPlay, ThirdPlay>()
-            ..on<GotoFourthPlay, FourthPlay>()
-            ..on<GotoFifthPlay, FifthPlay>()
-            ..on<GotoSixthPlay, SixthPlay>()
-            ..on<GotoSeventhPlay, SeventhPlay>()
-            ..on<GotoEighthPlay, EighthPlay>()
-            ..on<GotoNinthPlay, NinthPlay>()
-            ..on<GotoTenthPlay, TenthPlay>()
-            ..on<GoForward, TenthPlay>()
-            ..on<GoBackward, NinthPlay>(),
-        )
-        ..state<FirstPlay>(
-          builder: (g) => g
-            ..onEntry(
-              (_) {},
-            )
-            ..on<GotoFirstPrediction, FirstPrediction>()
-            ..on<GotoSecondPrediction, SecondPrediction>()
-            ..on<GotoThirdPrediction, ThirdPrediction>()
-            ..on<GotoFourthPrediction, FourthPrediction>()
-            ..on<GotoFifthPrediction, FifthPrediction>()
-            ..on<GotoSixthPrediction, SixthPrediction>()
-            ..on<GotoSeventhPrediction, SeventhPrediction>()
-            ..on<GotoEighthPrediction, EighthPrediction>()
-            ..on<GotoNinthPrediction, NinthPrediction>()
-            ..on<GotoTenthPrediction, TenthPrediction>()
-            ..on<GotoFirstPlay, FirstPlay>()
-            ..on<GotoSecondPlay, SecondPlay>()
-            ..on<GotoThirdPlay, ThirdPlay>()
-            ..on<GotoFourthPlay, FourthPlay>()
-            ..on<GotoFifthPlay, FifthPlay>()
-            ..on<GotoSixthPlay, SixthPlay>()
-            ..on<GotoSeventhPlay, SeventhPlay>()
-            ..on<GotoEighthPlay, EighthPlay>()
-            ..on<GotoNinthPlay, NinthPlay>()
-            ..on<GotoTenthPlay, TenthPlay>()
-            ..on<GoForward, SecondPrediction>()
-            ..on<GoBackward, FirstPrediction>(),
-        )
-        ..state<SecondPlay>(
-          builder: (g) => g
-            ..onEntry(
-              (_) {},
-            )
-            ..on<GotoFirstPrediction, FirstPrediction>()
-            ..on<GotoSecondPrediction, SecondPrediction>()
-            ..on<GotoThirdPrediction, ThirdPrediction>()
-            ..on<GotoFourthPrediction, FourthPrediction>()
-            ..on<GotoFifthPrediction, FifthPrediction>()
-            ..on<GotoSixthPrediction, SixthPrediction>()
-            ..on<GotoSeventhPrediction, SeventhPrediction>()
-            ..on<GotoEighthPrediction, EighthPrediction>()
-            ..on<GotoNinthPrediction, NinthPrediction>()
-            ..on<GotoTenthPrediction, TenthPrediction>()
-            ..on<GotoFirstPlay, FirstPlay>()
-            ..on<GotoSecondPlay, SecondPlay>()
-            ..on<GotoThirdPlay, ThirdPlay>()
-            ..on<GotoFourthPlay, FourthPlay>()
-            ..on<GotoFifthPlay, FifthPlay>()
-            ..on<GotoSixthPlay, SixthPlay>()
-            ..on<GotoSeventhPlay, SeventhPlay>()
-            ..on<GotoEighthPlay, EighthPlay>()
-            ..on<GotoNinthPlay, NinthPlay>()
-            ..on<GotoTenthPlay, TenthPlay>()
-            ..on<GoForward, ThirdPrediction>()
-            ..on<GoBackward, SecondPrediction>(),
-        )
-        ..state<ThirdPlay>(
-          builder: (g) => g
-            ..onEntry(
-              (_) {},
-            )
-            ..on<GotoFirstPrediction, FirstPrediction>()
-            ..on<GotoSecondPrediction, SecondPrediction>()
-            ..on<GotoThirdPrediction, ThirdPrediction>()
-            ..on<GotoFourthPrediction, FourthPrediction>()
-            ..on<GotoFifthPrediction, FifthPrediction>()
-            ..on<GotoSixthPrediction, SixthPrediction>()
-            ..on<GotoSeventhPrediction, SeventhPrediction>()
-            ..on<GotoEighthPrediction, EighthPrediction>()
-            ..on<GotoNinthPrediction, NinthPrediction>()
-            ..on<GotoTenthPrediction, TenthPrediction>()
-            ..on<GotoFirstPlay, FirstPlay>()
-            ..on<GotoSecondPlay, SecondPlay>()
-            ..on<GotoThirdPlay, ThirdPlay>()
-            ..on<GotoFourthPlay, FourthPlay>()
-            ..on<GotoFifthPlay, FifthPlay>()
-            ..on<GotoSixthPlay, SixthPlay>()
-            ..on<GotoSeventhPlay, SeventhPlay>()
-            ..on<GotoEighthPlay, EighthPlay>()
-            ..on<GotoNinthPlay, NinthPlay>()
-            ..on<GotoTenthPlay, TenthPlay>()
-            ..on<GoForward, FourthPrediction>()
-            ..on<GoBackward, ThirdPrediction>(),
-        )
-        ..state<FourthPlay>(
-          builder: (g) => g
-            ..onEntry(
-              (_) {},
-            )
-            ..on<GotoFirstPrediction, FirstPrediction>()
-            ..on<GotoSecondPrediction, SecondPrediction>()
-            ..on<GotoThirdPrediction, ThirdPrediction>()
-            ..on<GotoFourthPrediction, FourthPrediction>()
-            ..on<GotoFifthPrediction, FifthPrediction>()
-            ..on<GotoSixthPrediction, SixthPrediction>()
-            ..on<GotoSeventhPrediction, SeventhPrediction>()
-            ..on<GotoEighthPrediction, EighthPrediction>()
-            ..on<GotoNinthPrediction, NinthPrediction>()
-            ..on<GotoTenthPrediction, TenthPrediction>()
-            ..on<GotoFirstPlay, FirstPlay>()
-            ..on<GotoSecondPlay, SecondPlay>()
-            ..on<GotoThirdPlay, ThirdPlay>()
-            ..on<GotoFourthPlay, FourthPlay>()
-            ..on<GotoFifthPlay, FifthPlay>()
-            ..on<GotoSixthPlay, SixthPlay>()
-            ..on<GotoSeventhPlay, SeventhPlay>()
-            ..on<GotoEighthPlay, EighthPlay>()
-            ..on<GotoNinthPlay, NinthPlay>()
-            ..on<GotoTenthPlay, TenthPlay>()
-            ..on<GoForward, FifthPrediction>()
-            ..on<GoBackward, FourthPrediction>(),
-        )
-        ..state<FifthPlay>(
-          builder: (g) => g
-            ..onEntry(
-              (_) {},
-            )
-            ..on<GotoFirstPrediction, FirstPrediction>()
-            ..on<GotoSecondPrediction, SecondPrediction>()
-            ..on<GotoThirdPrediction, ThirdPrediction>()
-            ..on<GotoFourthPrediction, FourthPrediction>()
-            ..on<GotoFifthPrediction, FifthPrediction>()
-            ..on<GotoSixthPrediction, SixthPrediction>()
-            ..on<GotoSeventhPrediction, SeventhPrediction>()
-            ..on<GotoEighthPrediction, EighthPrediction>()
-            ..on<GotoNinthPrediction, NinthPrediction>()
-            ..on<GotoTenthPrediction, TenthPrediction>()
-            ..on<GotoFirstPlay, FirstPlay>()
-            ..on<GotoSecondPlay, SecondPlay>()
-            ..on<GotoThirdPlay, ThirdPlay>()
-            ..on<GotoFourthPlay, FourthPlay>()
-            ..on<GotoFifthPlay, FifthPlay>()
-            ..on<GotoSixthPlay, SixthPlay>()
-            ..on<GotoSeventhPlay, SeventhPlay>()
-            ..on<GotoEighthPlay, EighthPlay>()
-            ..on<GotoNinthPlay, NinthPlay>()
-            ..on<GotoTenthPlay, TenthPlay>()
-            ..on<GoForward, SixthPrediction>()
-            ..on<GoBackward, FifthPrediction>(),
-        )
-        ..state<SixthPlay>(
-          builder: (g) => g
-            ..onEntry(
-              (_) {},
-            )
-            ..on<GotoFirstPrediction, FirstPrediction>()
-            ..on<GotoSecondPrediction, SecondPrediction>()
-            ..on<GotoThirdPrediction, ThirdPrediction>()
-            ..on<GotoFourthPrediction, FourthPrediction>()
-            ..on<GotoFifthPrediction, FifthPrediction>()
-            ..on<GotoSixthPrediction, SixthPrediction>()
-            ..on<GotoSeventhPrediction, SeventhPrediction>()
-            ..on<GotoEighthPrediction, EighthPrediction>()
-            ..on<GotoNinthPrediction, NinthPrediction>()
-            ..on<GotoTenthPrediction, TenthPrediction>()
-            ..on<GotoFirstPlay, FirstPlay>()
-            ..on<GotoSecondPlay, SecondPlay>()
-            ..on<GotoThirdPlay, ThirdPlay>()
-            ..on<GotoFourthPlay, FourthPlay>()
-            ..on<GotoFifthPlay, FifthPlay>()
-            ..on<GotoSixthPlay, SixthPlay>()
-            ..on<GotoSeventhPlay, SeventhPlay>()
-            ..on<GotoEighthPlay, EighthPlay>()
-            ..on<GotoNinthPlay, NinthPlay>()
-            ..on<GotoTenthPlay, TenthPlay>()
-            ..on<GoForward, SeventhPrediction>()
-            ..on<GoBackward, SixthPrediction>(),
-        )
-        ..state<SeventhPlay>(
-          builder: (g) => g
-            ..onEntry(
-              (_) {},
-            )
-            ..on<GotoFirstPrediction, FirstPrediction>()
-            ..on<GotoSecondPrediction, SecondPrediction>()
-            ..on<GotoThirdPrediction, ThirdPrediction>()
-            ..on<GotoFourthPrediction, FourthPrediction>()
-            ..on<GotoFifthPrediction, FifthPrediction>()
-            ..on<GotoSixthPrediction, SixthPrediction>()
-            ..on<GotoSeventhPrediction, SeventhPrediction>()
-            ..on<GotoEighthPrediction, EighthPrediction>()
-            ..on<GotoNinthPrediction, NinthPrediction>()
-            ..on<GotoTenthPrediction, TenthPrediction>()
-            ..on<GotoFirstPlay, FirstPlay>()
-            ..on<GotoSecondPlay, SecondPlay>()
-            ..on<GotoThirdPlay, ThirdPlay>()
-            ..on<GotoFourthPlay, FourthPlay>()
-            ..on<GotoFifthPlay, FifthPlay>()
-            ..on<GotoSixthPlay, SixthPlay>()
-            ..on<GotoSeventhPlay, SeventhPlay>()
-            ..on<GotoEighthPlay, EighthPlay>()
-            ..on<GotoNinthPlay, NinthPlay>()
-            ..on<GotoTenthPlay, TenthPlay>()
-            ..on<GoForward, EighthPrediction>()
-            ..on<GoBackward, SeventhPrediction>(),
-        )
-        ..state<EighthPlay>(
-          builder: (g) => g
-            ..onEntry(
-              (_) {},
-            )
-            ..on<GotoFirstPrediction, FirstPrediction>()
-            ..on<GotoSecondPrediction, SecondPrediction>()
-            ..on<GotoThirdPrediction, ThirdPrediction>()
-            ..on<GotoFourthPrediction, FourthPrediction>()
-            ..on<GotoFifthPrediction, FifthPrediction>()
-            ..on<GotoSixthPrediction, SixthPrediction>()
-            ..on<GotoSeventhPrediction, SeventhPrediction>()
-            ..on<GotoEighthPrediction, EighthPrediction>()
-            ..on<GotoNinthPrediction, NinthPrediction>()
-            ..on<GotoTenthPrediction, TenthPrediction>()
-            ..on<GotoFirstPlay, FirstPlay>()
-            ..on<GotoSecondPlay, SecondPlay>()
-            ..on<GotoThirdPlay, ThirdPlay>()
-            ..on<GotoFourthPlay, FourthPlay>()
-            ..on<GotoFifthPlay, FifthPlay>()
-            ..on<GotoSixthPlay, SixthPlay>()
-            ..on<GotoSeventhPlay, SeventhPlay>()
-            ..on<GotoEighthPlay, EighthPlay>()
-            ..on<GotoNinthPlay, NinthPlay>()
-            ..on<GotoTenthPlay, TenthPlay>()
-            ..on<GoForward, NinthPrediction>()
-            ..on<GoBackward, EighthPrediction>(),
-        )
-        ..state<NinthPlay>(
-          builder: (g) => g
-            ..onEntry(
-              (_) {},
-            )
-            ..on<GotoFirstPrediction, FirstPrediction>()
-            ..on<GotoSecondPrediction, SecondPrediction>()
-            ..on<GotoThirdPrediction, ThirdPrediction>()
-            ..on<GotoFourthPrediction, FourthPrediction>()
-            ..on<GotoFifthPrediction, FifthPrediction>()
-            ..on<GotoSixthPrediction, SixthPrediction>()
-            ..on<GotoSeventhPrediction, SeventhPrediction>()
-            ..on<GotoEighthPrediction, EighthPrediction>()
-            ..on<GotoNinthPrediction, NinthPrediction>()
-            ..on<GotoTenthPrediction, TenthPrediction>()
-            ..on<GotoFirstPlay, FirstPlay>()
-            ..on<GotoSecondPlay, SecondPlay>()
-            ..on<GotoThirdPlay, ThirdPlay>()
-            ..on<GotoFourthPlay, FourthPlay>()
-            ..on<GotoFifthPlay, FifthPlay>()
-            ..on<GotoSixthPlay, SixthPlay>()
-            ..on<GotoSeventhPlay, SeventhPlay>()
-            ..on<GotoEighthPlay, EighthPlay>()
-            ..on<GotoNinthPlay, NinthPlay>()
-            ..on<GotoTenthPlay, TenthPlay>()
-            ..on<GoForward, TenthPrediction>()
-            ..on<GoBackward, NinthPrediction>(),
-        )
-        ..state<TenthPlay>(
-          builder: (g) => g
-            ..onEntry(
-              (_) {},
-            )
-            ..on<GotoFirstPrediction, FirstPrediction>()
-            ..on<GotoSecondPrediction, SecondPrediction>()
-            ..on<GotoThirdPrediction, ThirdPrediction>()
-            ..on<GotoFourthPrediction, FourthPrediction>()
-            ..on<GotoFifthPrediction, FifthPrediction>()
-            ..on<GotoSixthPrediction, SixthPrediction>()
-            ..on<GotoSeventhPrediction, SeventhPrediction>()
-            ..on<GotoEighthPrediction, EighthPrediction>()
-            ..on<GotoNinthPrediction, NinthPrediction>()
-            ..on<GotoTenthPrediction, TenthPrediction>()
-            ..on<GotoFirstPlay, FirstPlay>()
-            ..on<GotoSecondPlay, SecondPlay>()
-            ..on<GotoThirdPlay, ThirdPlay>()
-            ..on<GotoFourthPlay, FourthPlay>()
-            ..on<GotoFifthPlay, FifthPlay>()
-            ..on<GotoSixthPlay, SixthPlay>()
-            ..on<GotoSeventhPlay, SeventhPlay>()
-            ..on<GotoEighthPlay, EighthPlay>()
-            ..on<GotoNinthPlay, NinthPlay>()
-            ..on<GotoTenthPlay, TenthPlay>()
-            ..on<GoForward, GameEnd>()
-            ..on<GoBackward, TenthPrediction>(),
-        )
-        ..state<GameEnd>(
-          builder: (g) => g
-            ..onEntry(
-              (_) {},
-            )
-            ..on<GotoFirstPrediction, FirstPrediction>()
-            ..on<GotoSecondPrediction, SecondPrediction>()
-            ..on<GotoThirdPrediction, ThirdPrediction>()
-            ..on<GotoFourthPrediction, FourthPrediction>()
-            ..on<GotoFifthPrediction, FifthPrediction>()
-            ..on<GotoSixthPrediction, SixthPrediction>()
-            ..on<GotoSeventhPrediction, SeventhPrediction>()
-            ..on<GotoEighthPrediction, EighthPrediction>()
-            ..on<GotoNinthPrediction, NinthPrediction>()
-            ..on<GotoTenthPrediction, TenthPrediction>()
-            ..on<GotoFirstPlay, FirstPlay>()
-            ..on<GotoSecondPlay, SecondPlay>()
-            ..on<GotoThirdPlay, ThirdPlay>()
-            ..on<GotoFourthPlay, FourthPlay>()
-            ..on<GotoFifthPlay, FifthPlay>()
-            ..on<GotoSixthPlay, SixthPlay>()
-            ..on<GotoSeventhPlay, SeventhPlay>()
-            ..on<GotoEighthPlay, EighthPlay>()
-            ..on<GotoNinthPlay, NinthPlay>()
-            ..on<GotoTenthPlay, TenthPlay>()
-            ..on<GoForward, SetUpGameState>()
-            ..on<GoBackward, TenthPlay>(),
-        ),
-    );
-
 class GameState {
-  final Type state;
-  final GameSessionToken session;
+  Type state;
+  int currentRound = 0;
+  final GameRecord record;
 
-  const GameState(this.state, this.session);
+  GameState(this.state, this.record);
 }
 
 // states
@@ -697,53 +287,15 @@ class Playing implements AutomataState {}
 
 class History implements AutomataState {}
 
-class Prediction implements AutomataState {}
-
 class Result implements AutomataState {}
 
 // game fsm
 
-class SetUpGameState implements AutomataState {}
+class PreGameState implements AutomataState {}
 
-class FirstPrediction implements AutomataState {}
+class Prediction implements AutomataState {}
 
-class SecondPrediction implements AutomataState {}
-
-class ThirdPrediction implements AutomataState {}
-
-class FourthPrediction implements AutomataState {}
-
-class FifthPrediction implements AutomataState {}
-
-class SixthPrediction implements AutomataState {}
-
-class SeventhPrediction implements AutomataState {}
-
-class EighthPrediction implements AutomataState {}
-
-class NinthPrediction implements AutomataState {}
-
-class TenthPrediction implements AutomataState {}
-
-class FirstPlay implements AutomataState {}
-
-class SecondPlay implements AutomataState {}
-
-class ThirdPlay implements AutomataState {}
-
-class FourthPlay implements AutomataState {}
-
-class FifthPlay implements AutomataState {}
-
-class SixthPlay implements AutomataState {}
-
-class SeventhPlay implements AutomataState {}
-
-class EighthPlay implements AutomataState {}
-
-class NinthPlay implements AutomataState {}
-
-class TenthPlay implements AutomataState {}
+class Play implements AutomataState {}
 
 class GameEnd implements AutomataState {}
 
@@ -771,45 +323,21 @@ class Exit implements AutomataEvent {}
 
 class GotoSetUpGameState implements AutomataEvent {}
 
-class GotoFirstPrediction implements AutomataEvent {}
+class EndRound implements AutomataEvent {}
 
-class GotoSecondPrediction implements AutomataEvent {}
+class GotoPlay implements AutomataEvent {
+  // final int roundNumber;
+  // final Map<String, RoundRecord> records;
 
-class GotoThirdPrediction implements AutomataEvent {}
+  // const GotoPlay(this.roundNumber, this.records);
+}
 
-class GotoFourthPrediction implements AutomataEvent {}
+class GotoPrediction implements AutomataEvent {
+  final int roundNumber;
+  final Map<String, RoundRecord> records;
 
-class GotoFifthPrediction implements AutomataEvent {}
-
-class GotoSixthPrediction implements AutomataEvent {}
-
-class GotoSeventhPrediction implements AutomataEvent {}
-
-class GotoEighthPrediction implements AutomataEvent {}
-
-class GotoNinthPrediction implements AutomataEvent {}
-
-class GotoTenthPrediction implements AutomataEvent {}
-
-class GotoFirstPlay implements AutomataEvent {}
-
-class GotoSecondPlay implements AutomataEvent {}
-
-class GotoThirdPlay implements AutomataEvent {}
-
-class GotoFourthPlay implements AutomataEvent {}
-
-class GotoFifthPlay implements AutomataEvent {}
-
-class GotoSixthPlay implements AutomataEvent {}
-
-class GotoSeventhPlay implements AutomataEvent {}
-
-class GotoEighthPlay implements AutomataEvent {}
-
-class GotoNinthPlay implements AutomataEvent {}
-
-class GotoTenthPlay implements AutomataEvent {}
+  const GotoPrediction(this.roundNumber, this.records);
+}
 
 class GoForward implements AutomataEvent {}
 

@@ -2,21 +2,30 @@ import 'package:time_machine/time_machine.dart';
 
 class GameRecord {
   final Instant startTime;
+  final List<String> players;
   final List<Map<String, RoundRecord>> recordList = [];
+  int get latestRoundPlayed => recordList.length;
 
-  GameRecord({required List<String> players}) : startTime = Instant.now() {
-    for (int i = 0; i < 10; i++) {
-      recordList.add({});
-      for (String player in players) {
-        recordList[i][player] = RoundRecord(
-          roundNumber: i + 1,
-          player: player,
-          winsPredicted: 0,
-          actualWins: 0,
-          bonus: 0,
-        );
-      }
+  GameRecord({
+    required this.players,
+    List<Map<String, RoundRecord>>? records,
+  }) : startTime = Instant.now() {
+    if (records != null) {
+      recordList.addAll(records);
+      return;
     }
+    // for (int i = 0; i < 0; i++) {
+    // recordList.add({});
+    //   for (String player in players) {
+    //     recordList[i][player] = RoundRecord(
+    //       roundNumber: i + 1,
+    //       player: player,
+    //       winsPredicted: 0,
+    //       actualWins: 0,
+    //       bonus: 0,
+    //     );
+    //   }
+    // }
   }
 
   bool addRecord(Map<String, RoundRecord> record) {
@@ -27,7 +36,7 @@ class GameRecord {
     return true;
   }
 
-  bool modifyRoundRecord(
+  bool modifyRecord(
       {required int roundNumber, required Map<String, RoundRecord> record}) {
     if (roundNumber < 0 || roundNumber > 9) {
       return false;
@@ -75,5 +84,10 @@ class RoundRecord {
       actualWins: actualWins ?? this.actualWins,
       bonus: bonus ?? this.bonus,
     );
+  }
+
+  @override
+  String toString() {
+    return "{{{round: $roundNumber, player: $player, wins predicted: $winsPredicted, actual wins: $actualWins}}}\n";
   }
 }
