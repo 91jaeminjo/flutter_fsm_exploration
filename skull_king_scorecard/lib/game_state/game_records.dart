@@ -37,6 +37,17 @@ class GameRecord {
   }
 
   bool modifyRecord(
+      {required int roundNumber,
+      required String player,
+      required RoundRecord record}) {
+    if (roundNumber < 0 || roundNumber > 9) {
+      return false;
+    }
+    recordList[roundNumber][player] = record;
+    return true;
+  }
+
+  bool modifyAllRecords(
       {required int roundNumber, required Map<String, RoundRecord> record}) {
     if (roundNumber < 0 || roundNumber > 9) {
       return false;

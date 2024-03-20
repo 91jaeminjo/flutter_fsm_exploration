@@ -14,6 +14,7 @@ class SkullKingState {
   late final Stream<Type> stateStream;
 
   int get currentRound => _sessionState.currentRound;
+  int get indexableCurrentRound => _sessionState.currentRound - 1;
   set currentRound(int roundNumber) => _sessionState.currentRound = roundNumber;
   GameState _sessionState = GameState(
     PreGameState,
@@ -21,6 +22,8 @@ class SkullKingState {
       players: [],
     ),
   );
+
+  List<String> get players => _sessionState.record.players;
 
   final StreamController<GameState> gameStreamController =
       StreamController<GameState>.broadcast();
@@ -51,24 +54,66 @@ class SkullKingState {
           // ),
           );
 
-  Map<String, int> playerPrediction = {};
-  Map<String, int> playerWins = {};
-  Map<String, int> playerBonus = {};
+  // Map<String, int> playerPrediction = {};
+  // Map<String, int> playerWins = {};
+  // Map<String, int> playerBonus = {};
 
   void recordPlayerPredictions(
       {required String player, required int prediction}) {
-    playerPrediction[player] = prediction;
+    final currentRecord =
+        _sessionState.record.recordList[indexableCurrentRound][player];
+    assert(currentRecord != null);
+    _sessionState.record.modifyRecord(
+        roundNumber: indexableCurrentRound,
+        player: player,
+        record: RoundRecord(
+          roundNumber: currentRound,
+          player: player,
+          winsPredicted: prediction,
+          actualWins: currentRecord!.actualWins,
+          bonus: currentRecord.bonus,
+        ));
+    // currentRecord.modifyRecord(player)
+    // playerPrediction[player] = prediction;
   }
 
   void recordPlayerWins({required String player, required int wins}) {
-    playerWins[player] = wins;
+    final currentRecord =
+        _sessionState.record.recordList[indexableCurrentRound][player];
+    assert(currentRecord != null);
+    _sessionState.record.modifyRecord(
+        roundNumber: indexableCurrentRound,
+        player: player,
+        record: RoundRecord(
+          roundNumber: currentRound,
+          player: player,
+          winsPredicted: currentRecord!.winsPredicted,
+          actualWins: wins,
+          bonus: currentRecord.bonus,
+        ));
+    // playerWins[player] = wins;
+  }
+
+  void recordBonus({required String player, required int bonus}) {
+    final currentRecord =
+        _sessionState.record.recordList[indexableCurrentRound][player];
+    assert(currentRecord != null);
+    _sessionState.record.modifyRecord(
+        roundNumber: indexableCurrentRound,
+        player: player,
+        record: RoundRecord(
+          roundNumber: currentRound,
+          player: player,
+          winsPredicted: currentRecord!.winsPredicted,
+          actualWins: currentRecord.actualWins,
+          bonus: bonus,
+        ));
   }
 
   void startGame() {
     final records = <String, RoundRecord>{};
     currentRound = 1;
-    for (final entry in playerPrediction.entries) {
-      final player = entry.key;
+    for (final player in players) {
       final record = RoundRecord(
         roundNumber: currentRound,
         player: player,
@@ -84,34 +129,43 @@ class SkullKingState {
 
   void startRound() {
     final records = <String, RoundRecord>{};
-    for (final entry in playerPrediction.entries) {
-      final player = entry.key;
+    for (final player in players) {
       final record = RoundRecord(
         roundNumber: currentRound,
         player: player,
-        winsPredicted: entry.value,
-        actualWins: 0,
-        bonus: 0,
+        winsPredicted: _sessionState.record
+                .recordList[indexableCurrentRound][player]?.winsPredicted ??
+            0,
+        actualWins: _sessionState
+                .record.recordList[indexableCurrentRound][player]?.actualWins ??
+            0,
+        bonus: _sessionState
+                .record.recordList[indexableCurrentRound][player]?.bonus ??
+            0,
       );
       records[player] = record;
     }
     _sessionState.record
-        .modifyRecord(roundNumber: currentRound - 1, record: records);
-    gameFsm.send(GotoPlay(
-        // currentRound, records
-        ));
+        .modifyAllRecords(roundNumber: indexableCurrentRound, record: records);
+    gameFsm.send(GotoPlay());
   }
 
   // maybe send record directly through parameter here?
   void endRound() {
     final records = <String, RoundRecord>{};
-    for (final player in playerPrediction.keys) {
+    for (final player in players) {
       final record = RoundRecord(
         roundNumber: currentRound,
         player: player,
-        winsPredicted: playerPrediction[player] ?? 0,
-        actualWins: playerWins[player] ?? 0,
-        bonus: playerBonus[player] ?? 0,
+        winsPredicted: _sessionState.record
+                .recordList[indexableCurrentRound][player]?.winsPredicted ??
+            0,
+        actualWins: _sessionState
+                .record.recordList[indexableCurrentRound][player]?.actualWins ??
+            0,
+        bonus: _sessionState
+                .record.recordList[indexableCurrentRound][player]?.bonus ??
+            0,
       );
       records[player] = record;
     }
@@ -119,12 +173,11 @@ class SkullKingState {
     print(_sessionState.record.recordList);
     print('adding records: $records');
     _sessionState.record
-        .modifyRecord(roundNumber: currentRound - 1, record: records);
+        .modifyAllRecords(roundNumber: indexableCurrentRound, record: records);
     print(_sessionState.record.recordList);
     final newRecords = <String, RoundRecord>{};
     if (currentRound >= _sessionState.record.recordList.length) {
-      for (final entry in playerPrediction.entries) {
-        final player = entry.key;
+      for (final player in players) {
         final record = RoundRecord(
           roundNumber: currentRound + 1,
           player: player,
@@ -135,20 +188,17 @@ class SkullKingState {
         newRecords[player] = record;
       }
       _sessionState.record.addRecord(newRecords);
-      // final newGameRecord = GameRecord(
-      //   players: _sessionState.record.players,
-      //   roundNumber: currentRound + 1,
-      //   records: _sessionState.record.recordList,
-      // );
+
       print(_sessionState.record.recordList);
-      // _sessionState.add(GameState(_sessionState.last.state, newGameRecord));
     }
     currentRound++;
 
     gameFsm.send(EndRound());
   }
 
-  void goToRound(int roundNumber) {}
+  void goToRound(int roundNumber) {
+    gameFsm.send(GotoPrediction(roundNumber));
+  }
 
   void goForward() {
     gameFsm.send(GoForward());
@@ -231,7 +281,13 @@ class SkullKingState {
               ..on<GoBackward, Play>(
                   condition: (_) => currentRound > 1,
                   actions: [(_) => currentRound--])
-              ..on<GoBackward, PreGameState>(),
+              ..on<GoBackward, PreGameState>(
+                condition: (_) => currentRound == 1,
+                actions: [(_) => currentRound = 0],
+              )
+              ..on<GotoPrediction, Prediction>(
+                actions: [(event) => currentRound = event.roundNumber],
+              ),
           )
           ..state<Play>(
             builder: (g) => g
@@ -252,7 +308,10 @@ class SkullKingState {
               ..on<GoForward, GameEnd>(
                 condition: (e) => currentRound == 11,
               )
-              ..on<GoBackward, Prediction>(),
+              ..on<GoBackward, Prediction>()
+              ..on<GotoPrediction, Prediction>(
+                actions: [(event) => currentRound = event.roundNumber],
+              ),
           )
           ..state<GameEnd>(
             builder: (g) => g
@@ -260,7 +319,8 @@ class SkullKingState {
                 (_) {},
               )
               ..on<EndRound, Prediction>()
-              ..on<GotoPrediction, Prediction>()
+              ..on<GotoPrediction, Prediction>(
+                  actions: [(event) => currentRound = event.roundNumber])
               ..on<GotoPlay, Play>()
               ..on<GoForward, PreGameState>()
               ..on<GoBackward, Play>(),
@@ -325,18 +385,13 @@ class GotoSetUpGameState implements AutomataEvent {}
 
 class EndRound implements AutomataEvent {}
 
-class GotoPlay implements AutomataEvent {
-  // final int roundNumber;
-  // final Map<String, RoundRecord> records;
-
-  // const GotoPlay(this.roundNumber, this.records);
-}
+class GotoPlay implements AutomataEvent {}
 
 class GotoPrediction implements AutomataEvent {
   final int roundNumber;
-  final Map<String, RoundRecord> records;
+  // final Map<String, RoundRecord> records;
 
-  const GotoPrediction(this.roundNumber, this.records);
+  const GotoPrediction(this.roundNumber);
 }
 
 class GoForward implements AutomataEvent {}
